@@ -28,6 +28,9 @@
 
 #include <initguid.h>
 #include <moreuuids.h>
+#ifdef _VSMOD
+#include "..\DSUtil\DSMPropertyBag.h"
+#endif
 
 // our first format id
 #define __GAB1__ "GAB1"
@@ -68,6 +71,35 @@ HRESULT CSubtitleInputPin::CheckMediaType(const CMediaType* pmt)
            ? S_OK
            : E_FAIL;
 }
+
+#ifdef _VSMOD // patch m010. png background
+// A Matroska muxer moves the [Graphics] section of a script into file
+// attachments, so the images a \$img tag names are only reachable through
+// the splitter's resource bag. Give every PNG among them to the script.
+static void AddContainerImages(IFilterGraph* pGraph, CRenderedTextSubtitle* pRTS)
+{
+    static const BYTE pngSignature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+
+    BeginEnumFilters(pGraph, pEF, pBF)
+    {
+        CComQIPtr<IDSMResourceBag> pRB = pBF;
+        if(!pRB) continue;
+
+        for(DWORD i = 0, n = pRB->ResGetCount(); i < n; i++)
+        {
+            CComBSTR name, desc, mime;
+            BYTE* pData = NULL;
+            DWORD len = 0;
+            DWORD_PTR tag = 0;
+            if(FAILED(pRB->ResGet(i, &name, &desc, &mime, &pData, &len, &tag)) || !pData) continue;
+            if(len > sizeof(pngSignature) && !memcmp(pData, pngSignature, sizeof(pngSignature)))
+                pRTS->AddAttachedImage(CString(name), pData, len);
+            CoTaskMemFree(pData);
+        }
+    }
+    EndEnumFilters
+}
+#endif
 
 HRESULT CSubtitleInputPin::CompleteConnect(IPin* pReceivePin)
 {
@@ -124,6 +156,9 @@ HRESULT CSubtitleInputPin::CompleteConnect(IPin* pReceivePin)
 
                 pRTS->Open(mt.pbFormat + dwOffset, mt.cbFormat - dwOffset, DEFAULT_CHARSET, pRTS->m_name);
             }
+#ifdef _VSMOD
+            AddContainerImages(m_pFilter ? m_pFilter->GetFilterGraph() : NULL, pRTS);
+#endif
 
         }
         else if(m_mt.subtype == MEDIASUBTYPE_SSF)

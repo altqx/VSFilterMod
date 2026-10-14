@@ -1400,7 +1400,7 @@ static void PixelAtBiLinear(RGBQUAD& c, int x, int y, CVobSubImage& src)
                      + v2u1 + v2u2) >> 16;
 }
 
-static void StretchBlt(SubPicDesc& spd, CRect dstrect, CVobSubImage& src)
+static void StretchBlt(SubPicDesc& spd, CRect dstrect, CVobSubImage& src, int alpha)
 {
     if(dstrect.IsRectEmpty()) return;
 
@@ -1461,6 +1461,8 @@ static void StretchBlt(SubPicDesc& spd, CRect dstrect, CVobSubImage& src)
             ptr->rgbBlue = (cc[0].rgbBlue + cc[1].rgbBlue + cc[2].rgbBlue + cc[3].rgbBlue) >> 2;
             ptr->rgbReserved = (cc[0].rgbReserved + cc[1].rgbReserved + cc[2].rgbReserved + cc[3].rgbReserved) >> 2;
 ////
+            if(alpha < 100) ptr->rgbReserved = (BYTE)(ptr->rgbReserved * max(alpha, 0) / 100); // the .idx "alpha"
+
             ptr->rgbRed = ptr->rgbRed * ptr->rgbReserved >> 8;
             ptr->rgbGreen = ptr->rgbGreen * ptr->rgbReserved >> 8;
             ptr->rgbBlue = ptr->rgbBlue * ptr->rgbReserved >> 8;
@@ -1597,7 +1599,7 @@ HRESULT CVobSubSettings::Render(SubPicDesc& spd, RECT& bbox)
 {
     CRect r;
     GetDestrect(r, spd.w, spd.h);
-    StretchBlt(spd, r, m_img);
+    StretchBlt(spd, r, m_img, m_alpha);
     /*
     CRenderedTextSubtitle rts(NULL);
     rts.CreateDefaultStyle(DEFAULT_CHARSET);
