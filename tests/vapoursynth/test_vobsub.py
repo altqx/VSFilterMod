@@ -58,19 +58,19 @@ def main():
 
     # frame 20 = 2.0 s, inside the 1.0-3.0 s subpicture
     cases = [
-        ("default (langidx 0)", {}, 20, {(150, 400): WHITE, (100, 380): BLUE, (440, 115): BLACK}),
-        ("track=1", {"track": 1}, 20, {(440, 115): RED, (400, 100): BLUE, (150, 400): BLACK}),
+        ("default (langidx 0)", {}, 20, {(150, 400): WHITE, (150, 380): BLUE, (440, 115): BLACK}),
+        ("track=1", {"track": 1}, 20, {(440, 115): RED, (440, 100): BLUE, (150, 400): BLACK}),
         ("delay=1500, before", {"delay": 1500}, 20, {(150, 400): BLACK}),
         ("delay=1500, after", {"delay": 1500}, 30, {(150, 400): WHITE}),
         ("delay=-1500", {"delay": -1500}, 5, {(150, 400): WHITE}),
         ("forced=1", {"forced": 1}, 20, {(150, 400): BLACK}),
         ("colors+tridx", {"colors": "000000,00ff00,ff00ff,000000", "tridx": "1000"}, 20,
-         {(150, 400): GREEN, (100, 380): MAGENTA, (90, 370): BLACK}),
+         {(150, 400): GREEN, (150, 380): MAGENTA, (90, 370): BLACK}),
         ("palette", {"palette": ",".join(["000000", "00ff00"] + ["ff00ff"] * 14), "track": 1}, 20,
          {(440, 115): MAGENTA, (150, 400): BLACK}),
         ("x,y", {"x": 50, "y": -300}, 20, {(200, 100): WHITE, (150, 400): BLACK}),
         ("align+x,y", {"align": "center center", "x": 360, "y": 240}, 20,
-         {(360, 240): WHITE, (310, 220): BLUE, (150, 400): BLACK}),
+         {(360, 240): WHITE, (360, 220): BLUE, (150, 400): BLACK}),
         ("scale", {"track": 1, "scale_x": 50, "scale_y": 50}, 20, {(220, 57): RED, (440, 115): BLACK}),
         ("alpha=50", {"alpha": 50}, 20, {(150, 400): (128, 128, 128)}),
     ]

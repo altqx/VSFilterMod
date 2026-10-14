@@ -200,15 +200,13 @@ public:
 // field is optional; an unset one keeps the value from the .idx.
 struct VobSubOptions
 {
-    bool hasTrack, hasDelay, hasForced, hasX, hasY, hasScaleX, hasScaleY, hasAlpha, hasSmooth, hasFadeIn, hasFadeOut;
+    bool hasTrack, hasDelay, hasForced, hasX, hasY, hasScaleX, hasScaleY, hasAlpha;
     int track;      // idx language index ("id: en, index: N")
     int delay;      // ms, positive shows the subtitles later
     bool forced;    // only forced subtitles
     int x, y;       // "org": top-left of the picture, in idx "size" pixels
     int scaleX, scaleY; // %
     int alpha;      // %
-    int smooth;     // 0 off, 1 on, 2 old
-    int fadeIn, fadeOut; // ms
     CString colors; // "RRGGBB,RRGGBB,RRGGBB,RRGGBB": custom colours on
     CString tridx;  // which custom colours are transparent, idx style ("1000")
     CString palette; // 16 x "RRGGBB": replaces the .idx palette
@@ -216,8 +214,8 @@ struct VobSubOptions
 
     VobSubOptions()
     {
-        hasTrack = hasDelay = hasForced = hasX = hasY = hasScaleX = hasScaleY = hasAlpha = hasSmooth = hasFadeIn = hasFadeOut = false;
-        track = delay = x = y = scaleX = scaleY = alpha = smooth = fadeIn = fadeOut = 0;
+        hasTrack = hasDelay = hasForced = hasX = hasY = hasScaleX = hasScaleY = hasAlpha = false;
+        track = delay = x = y = scaleX = scaleY = alpha = 0;
         forced = false;
     }
 };
@@ -313,13 +311,6 @@ public:
             if(o.alpha < 0 || o.alpha > 100) return "alpha must be 0-100";
             vsf->m_alpha = o.alpha;
         }
-        if(o.hasSmooth)
-        {
-            if(o.smooth < 0 || o.smooth > 2) return "smooth must be 0 (off), 1 (on) or 2 (old)";
-            vsf->m_fSmooth = o.smooth;
-        }
-        if(o.hasFadeIn) vsf->m_fadein = max(o.fadeIn, 0);
-        if(o.hasFadeOut) vsf->m_fadeout = max(o.fadeOut, 0);
         if(o.hasX) vsf->m_x = o.x;
         if(o.hasY) vsf->m_y = o.y;
         if(o.hasX || o.hasY) vsf->m_org = CPoint(vsf->m_x, vsf->m_y);
@@ -907,8 +898,7 @@ public:
 
 // VobSub(clip, string file, int "track", int "delay", bool "forced",
 //        string "colors", string "tridx", string "palette", int "x", int "y",
-//        int "scale_x", int "scale_y", int "alpha", int "smooth",
-//        int "fadein", int "fadeout", string "align")
+//        int "scale_x", int "scale_y", int "alpha", string "align")
 AVSValue __cdecl VobSubCreateGeneral(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
     if(!args[1].Defined())
@@ -926,10 +916,7 @@ AVSValue __cdecl VobSubCreateGeneral(AVSValue args, void* user_data, IScriptEnvi
     if((o.hasScaleX = args[10].Defined())) o.scaleX = args[10].AsInt();
     if((o.hasScaleY = args[11].Defined())) o.scaleY = args[11].AsInt();
     if((o.hasAlpha = args[12].Defined())) o.alpha = args[12].AsInt();
-    if((o.hasSmooth = args[13].Defined())) o.smooth = args[13].AsInt();
-    if((o.hasFadeIn = args[14].Defined())) o.fadeIn = args[14].AsInt();
-    if((o.hasFadeOut = args[15].Defined())) o.fadeOut = args[15].AsInt();
-    if(args[16].Defined()) o.align = args[16].AsString();
+    if(args[13].Defined()) o.align = args[13].AsString();
 
     return(new CVobSubAvisynthFilter(args[0].AsClip(), args[1].AsString(), o, env));
 }
@@ -1028,7 +1015,7 @@ AVSValue __cdecl MaskSubCreate(AVSValue args, void* user_data, IScriptEnvironmen
 
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env)
 {
-    env->AddFunction("VobSub", "c[file]s[track]i[delay]i[forced]b[colors]s[tridx]s[palette]s[x]i[y]i[scale_x]i[scale_y]i[alpha]i[smooth]i[fadein]i[fadeout]i[align]s", VobSubCreateGeneral, 0);
+    env->AddFunction("VobSub", "c[file]s[track]i[delay]i[forced]b[colors]s[tridx]s[palette]s[x]i[y]i[scale_x]i[scale_y]i[alpha]i[align]s", VobSubCreateGeneral, 0);
 #ifdef _VSMOD
     env->AddFunction("TextSubMod", "c[file]s[charset]i[fps]f[vfr]s", TextSubCreateGeneral, 0);
     env->AddFunction("TextSubModSwapUV", "b", TextSubSwapUV, 0);
@@ -1091,9 +1078,6 @@ namespace VapourSynth {
         getInt("scale_x", o.hasScaleX, o.scaleX);
         getInt("scale_y", o.hasScaleY, o.scaleY);
         getInt("alpha", o.hasAlpha, o.alpha);
-        getInt("smooth", o.hasSmooth, o.smooth);
-        getInt("fadein", o.hasFadeIn, o.fadeIn);
-        getInt("fadeout", o.hasFadeOut, o.fadeOut);
         getStr("align", o.align);
         return o;
     }
@@ -1614,9 +1598,6 @@ namespace VapourSynth {
                      "scale_x:int:opt;"
                      "scale_y:int:opt;"
                      "alpha:int:opt;"
-                     "smooth:int:opt;"
-                     "fadein:int:opt;"
-                     "fadeout:int:opt;"
                      "align:data:opt;",
                      vsfilterCreate, const_cast<char *>("VobSub"), plugin);
     }
