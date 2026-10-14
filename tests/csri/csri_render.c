@@ -3,10 +3,10 @@
  * (VSFilterMod.dll) and write it as a binary PPM.
  *
  *   csri_render <renderer.dll> <script> <width> <height> <time-seconds> <out.ppm>
- *               [background RRGGBB] [file|mem]
+ *               [background RRGGBB] [file|mem] [bgr_|bgra [background alpha]]
  *
  * The frame starts as the background colour; the renderer draws on it in
- * CSRI_F_BGR_ ("RGB32"). The program prints how many pixels differ from
+ * CSRI_F_BGR_ ("RGB32") or CSRI_F_BGRA. The program prints how many pixels differ from
  * the background and their bounding box, so a test can assert on them
  * without an image library. Exit status: 0 rendered, 2 bad usage,
  * 3 DLL or entry points missing, 4 open failed, 5 format refused.
@@ -45,7 +45,7 @@ long ftell(FILE *);
 int fclose(FILE *);
 int fprintf(FILE *, const char *, ...);
 
-enum { CSRI_F_BGR_ = 0x102 };
+enum { CSRI_F_BGRA = 2, CSRI_F_BGR_ = 0x102 };
 struct csri_fmt { int pixfmt; unsigned width, height; };
 struct csri_frame { int pixfmt; unsigned char *planes[4]; ptrdiff_t_ strides[4]; };
 
@@ -59,7 +59,7 @@ typedef void (*close_fn)(void *);
 int main(int argc, char **argv)
 {
     if (argc < 7) {
-        printf("usage: csri_render <dll> <script> <w> <h> <time> <out.ppm> [bg RRGGBB] [file|mem]\n");
+        printf("usage: csri_render <dll> <script> <w> <h> <time> <out.ppm> [bg RRGGBB] [file|mem] [bgr_|bgra [bg alpha]]\n");
         return 2;
     }
     unsigned short wdll[1024];
@@ -78,6 +78,8 @@ int main(int argc, char **argv)
     double t = atof(argv[5]);
     unsigned long bg = argc > 7 ? (unsigned long)strtol(argv[7], 0, 16) : 0x202020;
     int use_mem = argc > 8 && !strcmp(argv[8], "mem");
+    int pixfmt = argc > 9 && !strcmp(argv[9], "bgra") ? CSRI_F_BGRA : CSRI_F_BGR_;
+    unsigned char bga = argc > 10 ? (unsigned char)strtol(argv[10], 0, 16) : 0;
     if (!w || !h) return 2;
 
     void *rend = rdef();
@@ -98,16 +100,16 @@ int main(int argc, char **argv)
     }
     if (!inst) { printf("open failed\n"); return 4; }
 
-    struct csri_fmt fmt = { CSRI_F_BGR_, w, h };
+    struct csri_fmt fmt = { pixfmt, w, h };
     if (reqfmt(inst, &fmt)) { printf("format refused\n"); closei(inst); return 5; }
 
     unsigned char *px = (unsigned char *)malloc((size_t)w * h * 4);
     unsigned char bb = bg & 0xff, bgc = (bg >> 8) & 0xff, br = (bg >> 16) & 0xff;
     for (size_t i = 0; i < (size_t)w * h; i++) {
-        px[i * 4 + 0] = bb; px[i * 4 + 1] = bgc; px[i * 4 + 2] = br; px[i * 4 + 3] = 0;
+        px[i * 4 + 0] = bb; px[i * 4 + 1] = bgc; px[i * 4 + 2] = br; px[i * 4 + 3] = bga;
     }
     struct csri_frame fr;
-    fr.pixfmt = CSRI_F_BGR_;
+    fr.pixfmt = pixfmt;
     fr.planes[0] = px; fr.planes[1] = fr.planes[2] = fr.planes[3] = 0;
     fr.strides[0] = (ptrdiff_t_)w * 4; fr.strides[1] = fr.strides[2] = fr.strides[3] = 0;
     render(inst, &fr, t);
@@ -122,7 +124,7 @@ int main(int argc, char **argv)
             unsigned char *p = px + ((size_t)y * w + x) * 4;
             unsigned char *o = rgb + ((size_t)y * w + x) * 3;
             o[0] = p[2]; o[1] = p[1]; o[2] = p[0];
-            if (p[0] != bb || p[1] != bgc || p[2] != br) {
+            if (p[0] != bb || p[1] != bgc || p[2] != br || (pixfmt == CSRI_F_BGRA && p[3] != bga)) {
                 changed++;
                 if (x < x0) x0 = x;
                 if (y < y0) y0 = y;
