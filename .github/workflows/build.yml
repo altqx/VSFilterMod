@@ -1,0 +1,94 @@
+name: Build
+
+# Builds VSFilterMod.dll for x86 and x64 with MSVC, runs the render tests and
+# uploads VSFilterMod_bin.zip (x86/VSFilterMod.dll, x64/VSFilterMod.dll: the
+# layout of the upstream release). A pushed tag also attaches the zip to the
+# GitHub release of that tag, creating the release when there is none.
+
+on:
+  push:
+    branches: ['**']
+    tags: ['r*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64
+
+    - name: Build x86
+      run: msbuild /t:Rebuild /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=v143 /m /p:"Configuration=Release (MOD)" /p:Platform=Win32
+
+    - name: Build x64
+      run: msbuild /t:Rebuild /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=v143 /m /p:"Configuration=Release (MOD)" /p:Platform=x64
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Package
+      shell: pwsh
+      run: |
+        python tests/package.py "bin/x64/VSFilter/Release (MOD)/VSFilterMod.dll" "bin/Win32/VSFilter/Release (MOD)/VSFilterMod.dll" dist VSFilterMod_bin.zip
+        $hash = (Get-FileHash VSFilterMod_bin.zip -Algorithm SHA256).Hash.ToLower()
+        "$hash  VSFilterMod_bin.zip" | Out-File -Encoding ascii VSFilterMod_bin.zip.sha256
+        "VSFilterMod_bin.zip SHA-256: ``$hash``" >> $env:GITHUB_STEP_SUMMARY
+        Get-Content VSFilterMod_bin.zip.sha256
+
+    - name: Render tests (CSRI, x64)
+      run: |
+        mkdir build
+        cl /nologo /O2 /W3 tests\csri\csri_render.c /Fe:build\csri_render_x64.exe /Fo:build\csri_render_x64.obj kernel32.lib legacy_stdio_definitions.lib
+        python tests/csri/make_cases.py build/cases
+        python tests/csri/run_cases.py build/csri_render_x64.exe dist/x64/VSFilterMod.dll build/cases build/frames-x64
+
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64_x86
+
+    - name: Render tests (CSRI, x86)
+      run: |
+        cl /nologo /O2 /W3 tests\csri\csri_render.c /Fe:build\csri_render_x86.exe /Fo:build\csri_render_x86.obj kernel32.lib legacy_stdio_definitions.lib
+        python tests/csri/run_cases.py build/csri_render_x86.exe dist/x86/VSFilterMod.dll build/cases build/frames-x86
+
+    - name: VobSub options (VapourSynth, x64)
+      run: |
+        python -m pip install --disable-pip-version-check vapoursynth==79
+        python tests/vobsub/make_vobsub.py build/vobsub
+        python tests/vapoursynth/test_vobsub.py dist/x64/VSFilterMod.dll build/vobsub build/frames-vobsub
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: VSFilterMod_bin
+        path: |
+          VSFilterMod_bin.zip
+          VSFilterMod_bin.zip.sha256
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-frames
+        path: |
+          build/cases
+          build/frames-*
+          build/vobsub
+        if-no-files-found: ignore
+
+    - name: Attach to the release
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "VSFilterMod $TAG" --notes "VSFilterMod_bin.zip contains x86 and x64 binaries."
+        gh release upload "$TAG" VSFilterMod_bin.zip VSFilterMod_bin.zip.sha256 --clobber
