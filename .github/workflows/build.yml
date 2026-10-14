@@ -44,28 +44,6 @@ jobs:
         "VSFilterMod_bin.zip SHA-256: ``$hash``" >> $env:GITHUB_STEP_SUMMARY
         Get-Content VSFilterMod_bin.zip.sha256
 
-    - name: Render tests (CSRI, x64)
-      run: |
-        mkdir build
-        cl /nologo /O2 /W3 tests\csri\csri_render.c /Fe:build\csri_render_x64.exe /Fo:build\csri_render_x64.obj kernel32.lib legacy_stdio_definitions.lib
-        python tests/csri/make_cases.py build/cases
-        python tests/csri/run_cases.py build/csri_render_x64.exe dist/x64/VSFilterMod.dll build/cases build/frames-x64
-
-    - uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: amd64_x86
-
-    - name: Render tests (CSRI, x86)
-      run: |
-        cl /nologo /O2 /W3 tests\csri\csri_render.c /Fe:build\csri_render_x86.exe /Fo:build\csri_render_x86.obj kernel32.lib legacy_stdio_definitions.lib
-        python tests/csri/run_cases.py build/csri_render_x86.exe dist/x86/VSFilterMod.dll build/cases build/frames-x86
-
-    - name: VobSub options (VapourSynth, x64)
-      run: |
-        python -m pip install --disable-pip-version-check vapoursynth==79
-        python tests/vobsub/make_vobsub.py build/vobsub
-        python tests/vapoursynth/test_vobsub.py dist/x64/VSFilterMod.dll build/vobsub build/frames-vobsub
-
     - uses: actions/upload-artifact@v4
       with:
         name: VSFilterMod_bin
@@ -73,14 +51,36 @@ jobs:
           VSFilterMod_bin.zip
           VSFilterMod_bin.zip.sha256
 
+    - name: Render tests (CSRI, x64)
+      run: |
+        mkdir test-out
+        cl /nologo /O2 /W3 tests\csri\csri_render.c /Fe:test-out\csri_render_x64.exe /Fo:test-out\csri_render_x64.obj kernel32.lib legacy_stdio_definitions.lib
+        python tests/csri/make_cases.py test-out/cases
+        python tests/csri/run_cases.py test-out/csri_render_x64.exe dist/x64/VSFilterMod.dll test-out/cases test-out/frames-x64
+
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64_x86
+
+    - name: Render tests (CSRI, x86)
+      run: |
+        cl /nologo /O2 /W3 tests\csri\csri_render.c /Fe:test-out\csri_render_x86.exe /Fo:test-out\csri_render_x86.obj kernel32.lib legacy_stdio_definitions.lib
+        python tests/csri/run_cases.py test-out/csri_render_x86.exe dist/x86/VSFilterMod.dll test-out/cases test-out/frames-x86
+
+    - name: VobSub options (VapourSynth, x64)
+      run: |
+        python -m pip install --disable-pip-version-check vapoursynth==79
+        python tests/vobsub/make_vobsub.py test-out/vobsub
+        python tests/vapoursynth/test_vobsub.py dist/x64/VSFilterMod.dll test-out/vobsub test-out/frames-vobsub
+
     - uses: actions/upload-artifact@v4
       if: always()
       with:
         name: test-frames
         path: |
-          build/cases
-          build/frames-*
-          build/vobsub
+          test-out/cases
+          test-out/frames-*
+          test-out/vobsub
         if-no-files-found: ignore
 
     - name: Attach to the release
