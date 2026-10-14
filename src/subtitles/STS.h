@@ -63,13 +63,15 @@ public:
 
     png_bytep*	pointer;
 
+    bool	attached; // from the script's [Graphics] section or the container, not from disk
+
     MOD_PNGIMAGE();
 
     bool operator == (MOD_PNGIMAGE& png);
     /**/
     bool processData(png_structp png_ptr);
     bool initImage(CString m_fn);
-    bool initImage(BYTE* data, CString m_fn);
+    bool initImage(const BYTE* data, size_t len, CString m_fn);
     void freeImage();
 };
 #endif
@@ -333,6 +335,8 @@ public:
 #ifdef _VSMOD // load embedded images
     bool LoadUUEFile(CTextFile* file, CString m_fn);
     bool LoadEfile(CString& img, CString m_fn);
+    bool AddAttachedImage(CString name, const BYTE* data, size_t len);
+    bool FindModImage(const CString& name, const CString& dir, MOD_PNGIMAGE& img);
 
     void MakeIndex(int SizeOfSegment);
 #endif

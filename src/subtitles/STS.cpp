@@ -1347,21 +1347,35 @@ static bool LoadFont(CString& font)
     return(true);
 }
 
+// A [Fonts] or [Graphics] block ends at a blank line or at the next section.
+// Writers such as Aegisub put the next section header right after the last
+// attachment line, so the header is handed back to the caller instead of
+// being swallowed (a lost [V4+ Styles] header turns the styles into v4 ones).
+static bool IsSectionHeader(const CString& s)
+{
+    static LPCTSTR const headers[] =
+    {
+        _T("[Script Info]"), _T("[V4+ Styles]"), _T("[V4 Styles]"), _T("[V4++ Styles]"),
+        _T("[Events]"), _T("[Fonts]"), _T("[Graphics]"),
+        _T("[Aegisub Project Garbage]"), _T("[Aegisub Extradata]"),
+    };
+    if(s.IsEmpty() || s[0] != '[') return(false);
+    for(size_t i = 0; i < countof(headers); i++)
+        if(s.CompareNoCase(headers[i]) == 0) return(true);
+    return(false);
+}
+
 static bool LoadUUEFont(CTextFile* file)
 {
     CString s, font;
-    while(file->ReadString(s))
+    for(ULONGLONG pos = file->GetPosition(); file->ReadString(s); pos = file->GetPosition())
     {
         s.Trim();
         if(s.IsEmpty()) break;
-        if(s[0] == '[') // check for some standatr blocks
+        if(IsSectionHeader(s))
         {
-            if(s.Find(_T("[Script Info]")) == 0) break;
-            if(s.Find(_T("[V4+ Styles]")) == 0) break;
-            if(s.Find(_T("[V4 Styles]")) == 0) break;
-            if(s.Find(_T("[Events]")) == 0) break;
-            if(s.Find(_T("[Fonts]")) == 0) break;
-            if(s.Find(_T("[Graphics]")) == 0) break;
+            file->Seek(pos, CFile::begin);
+            break;
         }
         if(s.Find(_T("fontname:")) == 0)
         {
@@ -1412,36 +1426,82 @@ bool CSimpleTextSubtitle::LoadEfile(CString& img, CString m_fn)
     }
 
     // load png image
+    return(AddAttachedImage(m_fn, pData.m_p, datalen));
+}
+
+bool CSimpleTextSubtitle::AddAttachedImage(CString name, const BYTE* data, size_t len)
+{
+    name.Trim();
+    if(name.IsEmpty()) return(false);
+
     MOD_PNGIMAGE t_temp;
-    if(t_temp.initImage(pData.m_p, m_fn)) // save path
+    if(!t_temp.initImage(data, len, name)) return(false);
+    t_temp.attached = true;
+
+    // A reload or a second source of the same name replaces the image. The
+    // old pixels stay allocated: styles of rendered lines may still use them.
+    for(size_t k = 0; k < mod_images.GetCount(); k++)
+        if(mod_images[k].attached && mod_images[k].filename.CompareNoCase(name) == 0)
+            return(mod_images[k] = t_temp, true);
+    mod_images.Add(t_temp);
+    return(true);
+}
+
+static CString ImageBaseName(const CString& path)
+{
+    int slash = path.ReverseFind('/');
+    int backslash = path.ReverseFind('\\');
+    if(backslash > slash) slash = backslash;
+    return(slash >= 0 ? path.Mid(slash + 1) : path);
+}
+
+// \$img lookup. As documented for VSFilterMod: images attached to the script
+// come first, then the file is looked for on disk (as given, then relative to
+// the script). Attachments carry only a file name, so a tag that names a path
+// still finds the attachment of the same name; names compare like Windows
+// file names, without case.
+bool CSimpleTextSubtitle::FindModImage(const CString& name, const CString& dir, MOD_PNGIMAGE& img)
+{
+    CString base = ImageBaseName(name);
+    for(size_t k = 0; k < mod_images.GetCount(); k++)
+        if(mod_images[k].attached && mod_images[k].filename.CompareNoCase(name) == 0)
+            return(img = mod_images[k], true);
+    for(size_t k = 0; k < mod_images.GetCount(); k++)
+        if(mod_images[k].attached && mod_images[k].filename.CompareNoCase(base) == 0)
+            return(img = mod_images[k], true);
+
+    for(size_t k = 0; k < mod_images.GetCount(); k++)
+        if(!mod_images[k].attached && (mod_images[k].filename == name || mod_images[k].filename == dir + name))
+            return(img = mod_images[k], true);
+
+    MOD_PNGIMAGE t_temp;
+    if(t_temp.initImage(name) || t_temp.initImage(dir + name)) // absolute path or default directory, then path + relative path
     {
         mod_images.Add(t_temp);
+        img = t_temp;
+        return(true);
     }
-    return(true);
+    return(false);
 }
 
 
 bool CSimpleTextSubtitle::LoadUUEFile(CTextFile* file, CString m_fn)
 {
     CString s, img;
-    while(file->ReadString(s))
+    for(ULONGLONG pos = file->GetPosition(); file->ReadString(s); pos = file->GetPosition())
     {
         s.Trim();
         if(s.IsEmpty()) break;
-        if(s[0] == '[') // check for some standatr blocks
+        if(IsSectionHeader(s))
         {
-            if(s.Find(_T("[Script Info]")) == 0) break;
-            if(s.Find(_T("[V4+ Styles]")) == 0) break;
-            if(s.Find(_T("[V4 Styles]")) == 0) break;
-            if(s.Find(_T("[Events]")) == 0) break;
-            if(s.Find(_T("[Fonts]")) == 0) break;
-            if(s.Find(_T("[Graphics]")) == 0) break;
+            file->Seek(pos, CFile::begin);
+            break;
         }
         // next file
         if(s.Find(_T("filename:")) == 0)
         {
             LoadEfile(img, m_fn);
-            m_fn = s.Mid(10);
+            m_fn = s.Mid(9).Trim();
             img.Empty();
             continue;
         }
@@ -1751,7 +1811,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
 #ifdef _VSMOD // load png graphic from text resources
         else if(entry == L"filename")
         {
-            ret.LoadUUEFile(file, GetStr(buff));
+            ret.LoadUUEFile(file, buff.Trim()); // the whole name, commas included
         }
         else if (entry == L"update details")
         {
@@ -3589,6 +3649,8 @@ MOD_PNGIMAGE::MOD_PNGIMAGE()
 {
     width = 0;
     height = 0;
+    bpp = 0;
+    attached = false;
 
     xoffset = 0;
     yoffset = 0;
@@ -3600,19 +3662,22 @@ MOD_PNGIMAGE::MOD_PNGIMAGE()
 }
 
 // read embedded graphics
-void png_default_read_edata(png_structp png_ptr, png_bytep data, png_size_t length)
+struct MOD_PNGMEMORY
 {
-    png_size_t check;
+    const BYTE* data;
+    size_t left;
+};
 
-    if(png_ptr->io_ptr == NULL)
-        return;
-
-    BYTE* eldata = (BYTE*)png_ptr->io_ptr;
+static void png_default_read_edata(png_structp png_ptr, png_bytep data, png_size_t length)
+{
+    MOD_PNGMEMORY* mem = (MOD_PNGMEMORY*)png_get_io_ptr(png_ptr);
+    if(mem == NULL || length > mem->left)
+        png_error(png_ptr, "read past the end of an attached image");
 
     // read from memory
-    memcpy(data, eldata, length);
-    eldata += length;
-    png_ptr->io_ptr = (png_voidp)eldata;
+    memcpy(data, mem->data, length);
+    mem->data += length;
+    mem->left -= length;
 }
 
 bool MOD_PNGIMAGE::operator == (MOD_PNGIMAGE& png)
@@ -3715,10 +3780,10 @@ bool MOD_PNGIMAGE::initImage(CString m_fn)
     return retVal;
 }
 
-bool MOD_PNGIMAGE::initImage(BYTE* data, CString m_fn)
+bool MOD_PNGIMAGE::initImage(const BYTE* data, size_t len, CString m_fn)
 {
     if((m_fn == filename) && (pointer != NULL)) return true; // already loaded
-    if(data == NULL) return false; // not loaded
+    if(data == NULL || len < 8) return false; // not loaded
 
     char header[8];	// 8 is the maximum size that can be check
     png_structp png_ptr;
@@ -3728,11 +3793,11 @@ bool MOD_PNGIMAGE::initImage(BYTE* data, CString m_fn)
     memcpy(header, data, 8);
     if(png_sig_cmp((png_bytep)header, 0, 8)) return false;  // File is not recognized as a PNG file
 
-    data += 8; // don't forget modify pointer
+    MOD_PNGMEMORY mem = { data + 8, len - 8 }; // don't forget modify pointer
     png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
     if(!png_ptr) return false;  // png_create_read_struct failed
 
-    png_set_read_fn(png_ptr, (png_voidp)data, &png_default_read_edata);
+    png_set_read_fn(png_ptr, (png_voidp)&mem, &png_default_read_edata);
     return processData(png_ptr);
 }
 

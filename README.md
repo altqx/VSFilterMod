@@ -7,6 +7,12 @@ Usage
 * clip: Clip to process. Only YUV420P8, YUV420P10, YUV420P16 and RGB24 are supported.
 * accurate: 1: enable accurate render for 10/16bit (~2x slower). / 0: disable (default)
 
+\$img
+-----
+`\$img(path[,xoffset,yoffset])` fills with a repeated PNG. The path may use `/` or `\`. Images attached
+to the script (its `[Graphics]` section, or the attachments of a Matroska file in DirectShow) are used
+first, matched by file name without case; then the path is tried as given and relative to the script.
+
 Knowing Issues
 =====
 * Opentype font (such as Source Han Sans) has a much smaller size when displayed vertically (used like @Source Han Sans). (subtitle renders which origin from VSFilter use GDI to render fonts, but GDI performs badly on opentype fonts.)

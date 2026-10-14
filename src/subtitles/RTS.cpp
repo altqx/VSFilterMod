@@ -2181,45 +2181,11 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 {
                     CString fpath = !m_resPath.IsEmpty() ? m_resPath : m_path.Left(m_path.ReverseFind('\\') + 1);
 
-                    bool t_init = false;
-                    // buffer
-                    for(ptrdiff_t k = 0, j = mod_images.GetCount(); k < j; k++)
-                    {
-                        MOD_PNGIMAGE t_temp = mod_images[k];
-                        if(t_temp.filename == params[0]) // found buffered image
-                        {
-                            style.mod_grad.b_images[i] = t_temp;
-                            t_init = true;
-                            break;
-                        }
-                        if(t_temp.filename == fpath + params[0]) // found buffered image
-                        {
-                            style.mod_grad.b_images[i] = t_temp;
-                            t_init = true;
-                            break;
-                        }
-                    }
-                    if(t_init)
+                    MOD_PNGIMAGE found;
+                    if(FindModImage(params[0], fpath, found))
                     {
                         style.mod_grad.mode[i] = 2;
-                    }
-                    else
-                    {
-                        // not found
-                        MOD_PNGIMAGE t_temp;
-                        if(t_temp.initImage(params[0])) // absolute path or default directory
-                        {
-                            style.mod_grad.mode[i] = 2;
-                            style.mod_grad.b_images[i] = t_temp;
-                            mod_images.Add(t_temp);
-                        }
-                        else
-                        if(t_temp.initImage(fpath + params[0])) // path + relative path
-                        {
-                            style.mod_grad.mode[i] = 2;
-                            style.mod_grad.b_images[i] = t_temp;
-                            mod_images.Add(t_temp);
-                        }
+                        style.mod_grad.b_images[i] = found;
                     }
                 }
                 if(params.GetCount() >= 3)
