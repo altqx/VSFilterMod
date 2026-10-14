@@ -5,7 +5,7 @@
 Both tracks show one subpicture from 1.000 s to 3.000 s on a 720x480 frame:
   track 0 ("en"): a 100x40 box at (100,380), white inside a blue frame
   track 1 ("ja"): an 80x30 box at (400,100), red inside a blue frame
-The inside is pixel type "pattern", the one pixel frame "emphasis 1" and the
+The inside is pixel type "pattern", the 4 pixel frame "emphasis 1" and the
 rest "background" (transparent), so custom colours can recolour each part.
 """
 import sys
@@ -13,6 +13,8 @@ from pathlib import Path
 
 PALETTE = ["000000", "ffffff", "ff0000", "0000ff", "00ff00", "ffff00", "00ffff", "ff00ff",
            "808080", "404040", "c0c0c0", "800000", "008000", "000080", "808000", "008080"]
+FRAME = 4  # frame width in pixels: wide enough to probe past the bilinear edge
+
 TRACKS = [
     # lang, x, y, w, h, colour index of pixel value 1, of pixel value 2
     ("en", 100, 380, 100, 40, 1, 3),
@@ -62,10 +64,10 @@ def rle_line(out, pixels):
 def spu(w, h, x, y, duration_ms, c1, c2):
     rows = []
     for r in range(h):
-        if r == 0 or r == h - 1:
+        if r < FRAME or r >= h - FRAME:
             rows.append([2] * w)
         else:
-            rows.append([2] + [1] * (w - 2) + [2])
+            rows.append([2] * FRAME + [1] * (w - 2 * FRAME) + [2] * FRAME)
     top, bottom = Nibbles(), Nibbles()
     for r in range(0, h, 2):
         rle_line(top, rows[r])
