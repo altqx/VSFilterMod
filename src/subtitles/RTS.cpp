@@ -1867,6 +1867,56 @@ void CRenderedTextSubtitle::ParsePolygon(CSubtitle* sub, CStringW str, STSStyle&
     }
 }
 
+#ifdef _VSMOD // patch m010. png background
+static bool IsImgNumber(const CStringW& s)
+{
+    if(s.IsEmpty()) return(false);
+    LPCWSTR begin = s;
+    LPWSTR end = NULL;
+    wcstod(begin, &end);
+    return(end != begin && *end == 0);
+}
+
+// \$img(path[,xoffset,yoffset]): the path may be a Windows path with
+// backslashes or contain commas, so the offsets are taken from the right
+// of the raw argument instead of the generic comma/backslash split.
+static void SplitImgParams(CStringW raw, CAtlArray<CStringW>& params)
+{
+    params.RemoveAll();
+    raw.Trim();
+    if(raw.IsEmpty()) return;
+
+    CAtlArray<CStringW> fields;
+    for(int start = 0;;)
+    {
+        int comma = raw.Find(',', start);
+        if(comma < 0)
+        {
+            fields.Add(raw.Mid(start));
+            break;
+        }
+        fields.Add(raw.Mid(start, comma - start));
+        start = comma + 1;
+    }
+
+    // Count numeric fields at the end; the third one would be the
+    // unimplemented angle and is ignored as before.
+    size_t n = fields.GetCount(), numeric = 0;
+    while(numeric < 3 && numeric + 1 < n && IsImgNumber(CStringW(fields[n - 1 - numeric]).Trim()))
+        numeric++;
+
+    size_t pathFields = n - numeric;
+    CStringW path = fields[0];
+    for(size_t k = 1; k < pathFields; k++) path += L"," + fields[k];
+    params.Add(path.Trim());
+    if(numeric >= 2)
+    {
+        params.Add(CStringW(fields[pathFields]).Trim());
+        params.Add(CStringW(fields[pathFields + 1]).Trim());
+    }
+}
+#endif
+
 bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& style, STSStyle& org, bool fAnimate)
 {
     if(!sub) return(false);
@@ -1881,6 +1931,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
         if(cmd.IsEmpty()) continue;
 
         CAtlArray<CStringW> params;
+        CStringW rawParams;
 
         if(str[j] == '(')
         {
@@ -1894,6 +1945,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 if(br == 0) break;
             }
             param.Trim();
+            rawParams = param;
 
             while(!param.IsEmpty())
             {
@@ -1920,7 +1972,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(2).Trim(L"&H")), cmd = cmd.Left(2);
 #ifdef _VSMOD // patch m010. png background
         else if(!cmd.Find(L"1img") || !cmd.Find(L"2img") || !cmd.Find(L"3img") || !cmd.Find(L"4img"))
-            ;//params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
+            SplitImgParams(rawParams, params);
 #endif
 #ifdef _VSMOD // patch m004. gradient colors
         else if(!cmd.Find(L"1vc") || !cmd.Find(L"2vc") || !cmd.Find(L"3vc") || !cmd.Find(L"4vc"))
