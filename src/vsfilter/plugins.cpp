@@ -57,7 +57,9 @@ protected:
     CSimpleTextSubtitle::YCbCrRange m_script_selected_range;
 
 public:
-    CFilter() : m_fps(-1), m_SubPicProviderId(0)
+    REFERENCE_TIME m_rtDelay; // subtitles show this much later (VobSub "delay")
+
+    CFilter() : m_fps(-1), m_SubPicProviderId(0), m_rtDelay(0)
     {
         CAMThread::Create();
     }
@@ -101,6 +103,8 @@ public:
             m_pSubPicQueue->SetSubPicProvider(m_pSubPicProvider);
             m_SubPicProviderId = (DWORD_PTR)(ISubPicProvider*)m_pSubPicProvider;
         }
+
+        rt -= m_rtDelay;
 
         CComPtr<ISubPic> pSubPic;
         if(!m_pSubPicQueue->LookupSubPic(rt, pSubPic))
@@ -190,10 +194,62 @@ public:
     }
 };
 
+// The settings a VobSub .idx file carries (and the VobSub/DirectVobSub
+// dialogs edit), so AviSynth and VapourSynth scripts can pick the track and
+// adjust timing, colours, size and position without editing the .idx. Every
+// field is optional; an unset one keeps the value from the .idx.
+struct VobSubOptions
+{
+    bool hasTrack, hasDelay, hasForced, hasX, hasY, hasScaleX, hasScaleY, hasAlpha, hasSmooth, hasFadeIn, hasFadeOut;
+    int track;      // idx language index ("id: en, index: N")
+    int delay;      // ms, positive shows the subtitles later
+    bool forced;    // only forced subtitles
+    int x, y;       // "org": top-left of the picture, in idx "size" pixels
+    int scaleX, scaleY; // %
+    int alpha;      // %
+    int smooth;     // 0 off, 1 on, 2 old
+    int fadeIn, fadeOut; // ms
+    CString colors; // "RRGGBB,RRGGBB,RRGGBB,RRGGBB": custom colours on
+    CString tridx;  // which custom colours are transparent, idx style ("1000")
+    CString palette; // 16 x "RRGGBB": replaces the .idx palette
+    CString align;  // "off", or "<left|center|right> <top|center|bottom>" around org
+
+    VobSubOptions()
+    {
+        hasTrack = hasDelay = hasForced = hasX = hasY = hasScaleX = hasScaleY = hasAlpha = hasSmooth = hasFadeIn = hasFadeOut = false;
+        track = delay = x = y = scaleX = scaleY = alpha = smooth = fadeIn = fadeOut = 0;
+        forced = false;
+    }
+};
+
+static bool ParseHexColors(CString str, RGBQUAD* colors, int count)
+{
+    str.Replace(_T(" "), _T(""));
+    int pos = 0, n = 0;
+    for(CString token = str.Tokenize(_T(","), pos); !token.IsEmpty(); token = str.Tokenize(_T(","), pos))
+    {
+        if(n >= count) return(false);
+        token.TrimLeft(_T("#"));
+        if(token.Left(2).CompareNoCase(_T("0x")) == 0) token = token.Mid(2);
+        LPTSTR end = NULL;
+        DWORD c = _tcstoul(token, &end, 16);
+        if(token.IsEmpty() || token.GetLength() > 6 || *end) return(false);
+        colors[n].rgbRed = (BYTE)(c >> 16);
+        colors[n].rgbGreen = (BYTE)(c >> 8);
+        colors[n].rgbBlue = (BYTE)c;
+        colors[n].rgbReserved = 0;
+        n++;
+    }
+    return(n == count);
+}
+
 class CVobSubFilter : virtual public CFilter
 {
+protected:
+    CVobSubFile* m_pVobSubFile;
+
 public:
-    CVobSubFilter(CString fn = _T(""))
+    CVobSubFilter(CString fn = _T("")) : m_pVobSubFile(NULL)
     {
         if(!fn.IsEmpty()) Open(fn);
     }
@@ -202,15 +258,126 @@ public:
     {
         SetFileName(_T(""));
         m_pSubPicProvider = NULL;
+        m_pVobSubFile = NULL;
 
         if(CVobSubFile* vsf = new CVobSubFile(&m_csSubLock))
         {
             m_pSubPicProvider = (ISubPicProvider*)vsf;
-            if(vsf->Open(CString(fn))) SetFileName(fn);
+            if(vsf->Open(CString(fn)))
+            {
+                SetFileName(fn);
+                m_pVobSubFile = vsf;
+            }
             else m_pSubPicProvider = NULL;
         }
 
         return !!m_pSubPicProvider;
+    }
+
+    // Returns an empty string, or what is wrong with the options.
+    CStringA Configure(const VobSubOptions& o)
+    {
+        CVobSubFile* vsf = m_pVobSubFile;
+        if(!vsf) return "no subtitles are open";
+
+        CAutoLock cAutoLock(&m_csSubLock);
+        CStringA err;
+
+        if(o.hasTrack)
+        {
+            if(o.track < 0 || o.track >= (int)countof(vsf->m_langs) || vsf->m_langs[o.track].subpos.IsEmpty())
+            {
+                CStringA tracks;
+                for(int i = 0; i < (int)countof(vsf->m_langs); i++)
+                    if(!vsf->m_langs[i].subpos.IsEmpty())
+                    {
+                        CStringA t;
+                        t.Format("%s%d (%s)", tracks.IsEmpty() ? "" : ", ", i, static_cast<const char*>(CStringA(vsf->m_langs[i].alt)));
+                        tracks += t;
+                    }
+                err.Format("track %d has no subtitles; tracks: %s", o.track, tracks.IsEmpty() ? "none" : static_cast<const char*>(tracks));
+                return err;
+            }
+            vsf->m_iLang = o.track;
+        }
+        if(o.hasDelay) m_rtDelay = 10000i64 * o.delay;
+        if(o.hasForced) vsf->m_fOnlyShowForcedSubs = o.forced;
+        if(o.hasScaleX || o.hasScaleY)
+        {
+            if((o.hasScaleX && o.scaleX <= 0) || (o.hasScaleY && o.scaleY <= 0)) return "scale_x and scale_y must be above 0";
+            if(o.hasScaleX) vsf->m_scale_x = o.scaleX;
+            if(o.hasScaleY) vsf->m_scale_y = o.scaleY;
+        }
+        if(o.hasAlpha)
+        {
+            if(o.alpha < 0 || o.alpha > 100) return "alpha must be 0-100";
+            vsf->m_alpha = o.alpha;
+        }
+        if(o.hasSmooth)
+        {
+            if(o.smooth < 0 || o.smooth > 2) return "smooth must be 0 (off), 1 (on) or 2 (old)";
+            vsf->m_fSmooth = o.smooth;
+        }
+        if(o.hasFadeIn) vsf->m_fadein = max(o.fadeIn, 0);
+        if(o.hasFadeOut) vsf->m_fadeout = max(o.fadeOut, 0);
+        if(o.hasX) vsf->m_x = o.x;
+        if(o.hasY) vsf->m_y = o.y;
+        if(o.hasX || o.hasY) vsf->m_org = CPoint(vsf->m_x, vsf->m_y);
+
+        if(!o.align.IsEmpty())
+        {
+            CString a(o.align);
+            a.MakeLower();
+            a.Trim();
+            if(a == _T("off") || a == _T("0"))
+                vsf->m_fAlign = false;
+            else
+            {
+                int pos = 0, hor = -1, ver = -1;
+                CString h = a.Tokenize(_T(" "), pos), v = a.Tokenize(_T(" "), pos);
+                if(h == _T("left")) hor = 0;
+                else if(h == _T("center")) hor = 1;
+                else if(h == _T("right")) hor = 2;
+                if(v == _T("top")) ver = 0;
+                else if(v == _T("center")) ver = 1;
+                else if(v == _T("bottom")) ver = 2;
+                if(hor < 0 || ver < 0) return "align must be \"off\" or \"<left|center|right> <top|center|bottom>\"";
+                vsf->m_fAlign = true;
+                vsf->m_alignhor = hor;
+                vsf->m_alignver = ver;
+            }
+        }
+
+        if(!o.palette.IsEmpty())
+        {
+            if(!ParseHexColors(o.palette, vsf->m_orgpal, 16)) return "palette must be 16 RRGGBB colours separated by commas";
+            vsf->m_img.Invalidate();
+        }
+
+        if(!o.colors.IsEmpty() || !o.tridx.IsEmpty())
+        {
+            RGBQUAD pal[4];
+            int tridx = 0;
+            if(!o.colors.IsEmpty())
+            {
+                if(!ParseHexColors(o.colors, pal, 4)) return "colors must be 4 RRGGBB colours separated by commas";
+            }
+            else memcpy(pal, vsf->m_cuspal, sizeof(pal));
+            if(!o.tridx.IsEmpty())
+            {
+                CString t(o.tridx);
+                t.Trim();
+                if(t.GetLength() != 4 || t.SpanIncluding(_T("01")) != t) return "tridx must be 4 binary digits, as in the .idx (\"1000\": the first colour is transparent)";
+                for(int i = 0; i < 4; i++)
+                    if(t[i] == '1') tridx |= 1 << i;
+            }
+            else tridx = vsf->m_tridx;
+            vsf->m_fCustomPal = true;
+            vsf->SetCustomPal(pal, tridx);
+        }
+
+        vsf->m_img.Invalidate();
+        return err;
     }
 };
 
@@ -726,18 +893,45 @@ public:
 class CVobSubAvisynthFilter : public CVobSubFilter, public CAvisynthFilter
 {
 public:
-    CVobSubAvisynthFilter(PClip c, const char* fn, IScriptEnvironment* env)
+    CVobSubAvisynthFilter(PClip c, const char* fn, const VobSubOptions& o, IScriptEnvironment* env)
         : CVobSubFilter(CString(fn))
         , CAvisynthFilter(c, env)
     {
         if(!m_pSubPicProvider)
             env->ThrowError("VobSub: Can't open \"%s\"", fn);
+        CStringA err = Configure(o);
+        if(!err.IsEmpty())
+            env->ThrowError("VobSub: %s", env->SaveString(err));
     }
 };
 
-AVSValue __cdecl VobSubCreateS(AVSValue args, void* user_data, IScriptEnvironment* env)
+// VobSub(clip, string file, int "track", int "delay", bool "forced",
+//        string "colors", string "tridx", string "palette", int "x", int "y",
+//        int "scale_x", int "scale_y", int "alpha", int "smooth",
+//        int "fadein", int "fadeout", string "align")
+AVSValue __cdecl VobSubCreateGeneral(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
-    return(new CVobSubAvisynthFilter(args[0].AsClip(), args[1].AsString(), env));
+    if(!args[1].Defined())
+        env->ThrowError("VobSub: You must specify a subtitle file to use");
+
+    VobSubOptions o;
+    if((o.hasTrack = args[2].Defined())) o.track = args[2].AsInt();
+    if((o.hasDelay = args[3].Defined())) o.delay = args[3].AsInt();
+    if((o.hasForced = args[4].Defined())) o.forced = args[4].AsBool();
+    if(args[5].Defined()) o.colors = args[5].AsString();
+    if(args[6].Defined()) o.tridx = args[6].AsString();
+    if(args[7].Defined()) o.palette = args[7].AsString();
+    if((o.hasX = args[8].Defined())) o.x = args[8].AsInt();
+    if((o.hasY = args[9].Defined())) o.y = args[9].AsInt();
+    if((o.hasScaleX = args[10].Defined())) o.scaleX = args[10].AsInt();
+    if((o.hasScaleY = args[11].Defined())) o.scaleY = args[11].AsInt();
+    if((o.hasAlpha = args[12].Defined())) o.alpha = args[12].AsInt();
+    if((o.hasSmooth = args[13].Defined())) o.smooth = args[13].AsInt();
+    if((o.hasFadeIn = args[14].Defined())) o.fadeIn = args[14].AsInt();
+    if((o.hasFadeOut = args[15].Defined())) o.fadeOut = args[15].AsInt();
+    if(args[16].Defined()) o.align = args[16].AsString();
+
+    return(new CVobSubAvisynthFilter(args[0].AsClip(), args[1].AsString(), o, env));
 }
 
 class CTextSubAvisynthFilter : public CTextSubFilter, public CAvisynthFilter
@@ -834,7 +1028,7 @@ AVSValue __cdecl MaskSubCreate(AVSValue args, void* user_data, IScriptEnvironmen
 
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env)
 {
-    env->AddFunction("VobSub", "cs", VobSubCreateS, 0);
+    env->AddFunction("VobSub", "c[file]s[track]i[delay]i[forced]b[colors]s[tridx]s[palette]s[x]i[y]i[scale_x]i[scale_y]i[alpha]i[smooth]i[fadein]i[fadeout]i[align]s", VobSubCreateGeneral, 0);
 #ifdef _VSMOD
     env->AddFunction("TextSubMod", "c[file]s[charset]i[fps]f[vfr]s", TextSubCreateGeneral, 0);
     env->AddFunction("TextSubModSwapUV", "b", TextSubSwapUV, 0);
@@ -872,6 +1066,37 @@ namespace VapourSynth {
             *error = !m_pSubPicProvider ? 1 : 0;
         }
     };
+
+    static VobSubOptions VobSubOptionsFromMap(const VSMap *in, const VSAPI *vsapi) {
+        VobSubOptions o;
+        int err;
+        auto getInt = [&](const char *key, bool& has, int& value) {
+            int64_t v = vsapi->propGetInt(in, key, 0, &err);
+            if (!err) { has = true; value = int64ToIntS(v); }
+        };
+        auto getStr = [&](const char *key, CString& value) {
+            const char *v = vsapi->propGetData(in, key, 0, &err);
+            if (!err) value = CString(UTF8To16(v));
+        };
+        int forced = 0;
+        getInt("track", o.hasTrack, o.track);
+        getInt("delay", o.hasDelay, o.delay);
+        getInt("forced", o.hasForced, forced);
+        o.forced = forced != 0;
+        getStr("colors", o.colors);
+        getStr("tridx", o.tridx);
+        getStr("palette", o.palette);
+        getInt("x", o.hasX, o.x);
+        getInt("y", o.hasY, o.y);
+        getInt("scale_x", o.hasScaleX, o.scaleX);
+        getInt("scale_y", o.hasScaleY, o.scaleY);
+        getInt("alpha", o.hasAlpha, o.alpha);
+        getInt("smooth", o.hasSmooth, o.smooth);
+        getInt("fadein", o.hasFadeIn, o.fadeIn);
+        getInt("fadeout", o.hasFadeOut, o.fadeOut);
+        getStr("align", o.align);
+        return o;
+    }
 
     struct VSFilterData {
         VSNodeRef* node;
@@ -1339,7 +1564,18 @@ namespace VapourSynth {
             vsapi->freeNode(d.node);
             delete d.textsub;
             delete d.vobsub;
+            delete[] file;
             return;
+        }
+        if (d.vobsub) {
+            CStringA problem = d.vobsub->Configure(VobSubOptionsFromMap(in, vsapi));
+            if (!problem.IsEmpty()) {
+                vsapi->setError(out, (filterName + ": " + static_cast<const char *>(problem)).c_str());
+                vsapi->freeNode(d.node);
+                delete d.vobsub;
+                delete[] file;
+                return;
+            }
         }
 
         d.accurate16bit = vsapi->propGetInt(in, "accurate", 0, &err) != 0;
@@ -1366,7 +1602,22 @@ namespace VapourSynth {
         registerFunc("VobSub",
                      "clip:clip;"
                      "file:data;"
-                     "accurate:int:opt;",
+                     "accurate:int:opt;"
+                     "track:int:opt;"
+                     "delay:int:opt;"
+                     "forced:int:opt;"
+                     "colors:data:opt;"
+                     "tridx:data:opt;"
+                     "palette:data:opt;"
+                     "x:int:opt;"
+                     "y:int:opt;"
+                     "scale_x:int:opt;"
+                     "scale_y:int:opt;"
+                     "alpha:int:opt;"
+                     "smooth:int:opt;"
+                     "fadein:int:opt;"
+                     "fadeout:int:opt;"
+                     "align:data:opt;",
                      vsfilterCreate, const_cast<char *>("VobSub"), plugin);
     }
 }
