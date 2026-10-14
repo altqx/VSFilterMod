@@ -42,6 +42,10 @@ extern "C" struct csri_vsfilter_inst
     CRect video_rect;
     enum csri_pixfmt pixfmt;
     size_t readorder;
+    // CSRI_F_BGRA: VSFilter's own surface, screen_res pixels, kept clear
+    // (0xff000000) between renders
+    DWORD *surface;
+    size_t surface_pixels;
 };
 typedef struct csri_vsfilter_inst csri_inst;
 #include "csri.h"
@@ -110,6 +114,7 @@ CSRIAPI void csri_close(csri_inst *inst)
 {
     if(!inst) return;
 
+    free(inst->surface);
     delete inst->rts;
     delete inst->cs;
     delete inst;
@@ -145,6 +150,44 @@ CSRIAPI int csri_request_fmt(csri_inst *inst, const struct csri_fmt *fmt)
 }
 
 
+/* Lay VSFilter's surface over a CSRI_F_BGRA frame and clear the surface.
+ *
+ * The surface is premultiplied BGR with inverted alpha: the top byte is how
+ * much of what lies below shows through (255 everywhere nothing is drawn).
+ * CSRI_F_BGRA is straight alpha with 255 opaque, as asa (the renderer
+ * written by CSRI's author) draws it: its BGRA blit lays the subtitles over
+ * the frame's own alpha. So a cleared frame (alpha 0) gets the subtitles' colour
+ * and coverage, an opaque one ends as BGR_ would have drawn it, and pixels
+ * nothing was drawn on are left as they are. */
+static void LaySurfaceOverBgra(DWORD *surface, int w, int h, BYTE *frame, ptrdiff_t stride)
+{
+    for(int y = 0; y < h; y++)
+    {
+        DWORD *s = surface + (size_t)y * w;
+        BYTE *d = frame + y * stride;
+        for(int x = 0; x < w; x++, d += 4)
+        {
+            DWORD p = s[x];
+            if(p == 0xff000000)
+                continue;
+            s[x] = 0xff000000;
+
+            DWORD through = p >> 24;
+            DWORD below = (d[3] * through + 127) / 255;
+            DWORD alpha = (255 - through) + below;
+            if(alpha == 0)
+                continue;
+            for(int c = 0; c < 3; c++)
+            {
+                DWORD premultiplied = ((p >> (8 * c)) & 0xff) * 255 + d[c] * below;
+                DWORD v = (premultiplied + alpha / 2) / alpha;
+                d[c] = (BYTE)(v > 255 ? 255 : v);
+            }
+            d[3] = (BYTE)alpha;
+        }
+    }
+}
+
 CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
 {
     if(!inst || !frame)
@@ -162,13 +205,30 @@ CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
         if(!frame->planes[0])
             return;
 
-        /* VSFilter's native surface is premultiplied BGR with inverted alpha
-         * (255 is transparent). Render directly so CSRI composes in place
-         * without converting through straight alpha. */
+        /* VSFilter draws on its native surface, premultiplied with inverted
+         * alpha (255 is transparent). Drawn straight onto the frame it only
+         * scaled the frame's alpha by what shows through, so a cleared frame
+         * stayed transparent and an opaque one came out inverted. Draw on a
+         * cleared surface instead and lay it over the frame afterwards. */
+        {
+            if((size_t)spd.h > (std::numeric_limits<size_t>::max)() / sizeof(DWORD) / spd.w)
+                return;
+            size_t pixels = (size_t)spd.w * spd.h;
+            if(inst->surface_pixels != pixels)
+            {
+                free(inst->surface);
+                inst->surface = (DWORD*)malloc(pixels * sizeof(DWORD));
+                inst->surface_pixels = inst->surface ? pixels : 0;
+                if(!inst->surface)
+                    return;
+                for(size_t i = 0; i < pixels; i++)
+                    inst->surface[i] = 0xff000000;
+            }
+        }
         spd.type = MSP_RGBA;
         spd.bpp = 32;
-        spd.bits = frame->planes[0];
-        spd.pitch = frame->strides[0];
+        spd.bits = (BYTE*)inst->surface;
+        spd.pitch = spd.w * 4;
         break;
 
     case CSRI_F_BGR_:
@@ -210,6 +270,9 @@ CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
 
     CRect rendered_bbox(0, 0, 0, 0);
     inst->rts->Render(spd, (REFERENCE_TIME)(time * 10000000), arbitrary_framerate, rendered_bbox);
+
+    if(inst->pixfmt == CSRI_F_BGRA)
+        LaySurfaceOverBgra(inst->surface, spd.w, spd.h, frame->planes[0], frame->strides[0]);
 }
 
 

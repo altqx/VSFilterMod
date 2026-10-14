@@ -5,9 +5,11 @@
  *   csri_render <renderer.dll> <script> <width> <height> <time-seconds> <out.ppm>
  *               [background RRGGBB] [file|mem] [bgr_|bgra [background alpha]]
  *
- * The frame starts as the background colour; the renderer draws on it in
- * CSRI_F_BGR_ ("RGB32") or CSRI_F_BGRA. The program prints how many pixels differ from
- * the background and their bounding box, so a test can assert on them
+ * The frame starts as the background colour and alpha; the renderer draws on
+ * it in CSRI_F_BGR_ ("RGB32") or CSRI_F_BGRA. The colour goes to out.ppm and
+ * the fourth byte of every pixel (alpha, or BGR_'s padding) to out.ppm with
+ * ".alpha.pgm" in place of ".ppm". The program prints how many pixels differ
+ * from the background and their bounding box, so a test can assert on them
  * without an image library. Exit status: 0 rendered, 2 bad usage,
  * 3 DLL or entry points missing, 4 open failed, 5 format refused.
  *
@@ -36,6 +38,7 @@ double atof(const char *);
 int atoi(const char *);
 long strtol(const char *, char **, int);
 int strcmp(const char *, const char *);
+size_t strlen(const char *);
 typedef struct _iobuf FILE;
 FILE *fopen(const char *, const char *);
 size_t fwrite(const void *, size_t, size_t, FILE *);
@@ -137,6 +140,21 @@ int main(int argc, char **argv)
     fprintf(out, "P6\n%u %u\n255\n", w, h);
     fwrite(rgb, 1, (size_t)w * h * 3, out);
     fclose(out);
+
+    /* The fourth bytes, as a greyscale image beside the colour. */
+    size_t n = strlen(argv[6]);
+    char *apath = (char *)malloc(n + 16);
+    size_t stem = n > 4 && !strcmp(argv[6] + n - 4, ".ppm") ? n - 4 : n;
+    for (size_t i = 0; i < stem; i++) apath[i] = argv[6][i];
+    const char *suffix = ".alpha.pgm";
+    for (size_t i = 0; i <= 10; i++) apath[stem + i] = suffix[i];
+    for (size_t i = 0; i < (size_t)w * h; i++) rgb[i] = px[i * 4 + 3];
+    out = fopen(apath, "wb");
+    if (!out) { printf("cannot write %s\n", apath); return 4; }
+    fprintf(out, "P5\n%u %u\n255\n", w, h);
+    fwrite(rgb, 1, (size_t)w * h, out);
+    fclose(out);
+    free(apath);
     if (changed)
         printf("changed=%ld bbox=%u,%u-%u,%u\n", changed, x0, y0, x1, y1);
     else

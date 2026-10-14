@@ -4,7 +4,7 @@
 
 The scripts exercise VSFilterMod's \\$img tag: plain path, path with x/y
 offsets, an image embedded in the script's [Graphics] section, and plain
-text as a control. run_cases.py renders them and checks pixels.
+text as a control; alpha.ass checks the alpha of CSRI_F_BGRA frames. run_cases.py renders them and checks pixels.
 """
 import struct
 import sys
@@ -120,6 +120,9 @@ def main():
     write_packed(out, "img_attached_packed.ass", [BOX % r"\1img(embedded.png)"], graphics=embedded)
     # no override tags: the style (v4+ alignment 7, top left) places the text
     write_packed(out, "graphics_before_styles.ass", ["VSFilterMod"], graphics=embedded)
+    # alpha: an opaque white box at (100,100) and a half transparent red one
+    # (\1a&H80&: 127 of 255 covered) at (300,100), both 128x128
+    write(out, "alpha.ass", [BOX % r"\1c&HFFFFFF&", (BOX % r"\1c&H0000FF&\1a&H80&").replace(r"\pos(100,100)", r"\pos(300,100)")])
 
 
 if __name__ == "__main__":
